@@ -1,0 +1,11 @@
+{application, erl_snowflake, [
+  {description, "Erlang fast snowflake id generator"},
+  {vsn, "1.0.0"},
+  {registered, []},
+  {applications, [
+    kernel,
+    stdlib
+  ]},
+  {licenses, ["Apache-2.0"]},
+  {links, [{"GitHub", "https://github.com/petrkozorezov/erl_snowflake"}]}
+]}.
