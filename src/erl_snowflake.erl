@@ -12,12 +12,11 @@
 -type  timestamp() :: non_neg_integer().
 -type machine_id() :: non_neg_integer().
 
--define(timestamp_size   , 41).
--define(machine_id_size  , 10).
--define(counter_size     , 12).
--define(max_counter_value, (1 bsl (?counter_size - 1))).
--define(snowflake_epoch  , 1325376000000). % 2012-01-01 - 1970-01-01 in ms
--define(str_int_base     , 62).
+-define(timestamp_size , 41).
+-define(machine_id_size, 10).
+-define(counter_size   , 12).
+-define(snowflake_epoch, 1325376000000). % 2012-01-01 - 1970-01-01 in ms
+-define(str_int_base   , 62).
 
 -define(id_bin(Timestamp, MachineID, Count),
   <<0:1, (Timestamp):?timestamp_size, (MachineID):?machine_id_size, (Count):?counter_size>>
@@ -115,7 +114,7 @@ snowflake_now() ->
   counter().
 get_and_increment_counter() ->
   Counter = ?pt_get(erl_snowflake_counter, atomics:new(1, [{signed, false}])),
-  atomics:add_get(Counter, 1, 1) rem ?max_counter_value.
+  atomics:add_get(Counter, 1, 1) rem (1 bsl ?counter_size).
 
 %%
 %% formatting integer with specific base
