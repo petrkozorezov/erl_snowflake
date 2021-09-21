@@ -71,3 +71,7 @@ It can be configured via defines for your needs (e.g. as in [instagram](https://
   ]}
 ]}.
 ```
+
+## Rollover
+
+`generate_*` functions check counter rollover and `generate_unsafe` will throw `error:'maximum counter value reached'`, while `generate` function will wait 1 ms and try again (and throw the error if second attemt will fail).

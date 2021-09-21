@@ -1,9 +1,9 @@
 -module(erl_snowflake).
 
--export([generate/0, generate/1]).
+-export([generate/0, generate_unsafe/0, generate/1, generate_unsafe/1]).
 -export([to/2, from/2]).
 -export([get_machine_id/0, set_machine_id/1, term_to_machine_id/1, hostname/0]).
--export([snowflake_now/0, get_and_increment_counter/0]).
+-export([snowflake_now/0, get_and_increment_counter/1]).
 
 -type     id() :: {timestamp(), machine_id(), counter()}.
 -type format() :: bin | int | str | b62.
@@ -12,7 +12,9 @@
 -type  timestamp() :: non_neg_integer().
 -type machine_id() :: non_neg_integer().
 
+-define(max_counter_value, (1 bsl ?counter_bits - 1)).
 -define(str_int_base, 62).
+-define(rollover_error, 'maximum counter value reached').
 
 -define(id_bin(Timestamp, MachineID, Count),
   <<0:?zero_bits, (Timestamp):?timestamp_bits, (MachineID):?machine_id_bits, (Count):?counter_bits>>
@@ -24,12 +26,29 @@
 -spec generate() ->
   id().
 generate() ->
-  {snowflake_now(), get_machine_id(), get_and_increment_counter()}.
+  try
+    generate_unsafe()
+  catch
+    error:?rollover_error ->
+      timer:sleep(1),
+      generate_unsafe()
+  end.
+
+-spec generate_unsafe() ->
+  id().
+generate_unsafe() ->
+  Timestamp = snowflake_now(),
+  {Timestamp, get_machine_id(), get_and_increment_counter(Timestamp)}.
 
 -spec generate(format()) ->
   ID::term().
 generate(Format) ->
   to(Format, generate()).
+
+-spec generate_unsafe(format()) ->
+  ID::term().
+generate_unsafe(Format) ->
+  to(Format, generate_unsafe()).
 
 %%
 
@@ -105,11 +124,30 @@ hostname() ->
 snowflake_now() ->
   erlang:system_time(millisecond) - ?epoch.
 
--spec get_and_increment_counter() ->
+-spec get_and_increment_counter(timestamp()) ->
   counter().
-get_and_increment_counter() ->
-  Counter = ?pt_get(erl_snowflake_counter, atomics:new(1, [{signed, false}])),
-  atomics:add_get(Counter, 1, 1) rem (1 bsl ?counter_bits).
+get_and_increment_counter(Timestamp) ->
+  AtomicsRef = ?pt_get(erl_snowflake_counter, atomics:new(1, [{signed, false}])),
+  Counter    = atomics:get(AtomicsRef, 1),
+  get_and_increment_counter(Timestamp, AtomicsRef, Counter).
+
+get_and_increment_counter(Timestamp, AtomicsRef, Counter) ->
+  MSInitial  = Timestamp bsl ?counter_bits,
+  NewCounter =
+    if
+      Counter == MSInitial + ?max_counter_value ->
+        erlang:error(?rollover_error);
+      Counter >= MSInitial ->
+        Counter + 1;
+      true -> % new millisecond
+        MSInitial
+    end,
+  case atomics:compare_exchange(AtomicsRef, 1, Counter, NewCounter) of
+    ok ->
+      NewCounter band ?max_counter_value;
+    UpdatedCounter ->
+      get_and_increment_counter(Timestamp, AtomicsRef, UpdatedCounter)
+  end.
 
 %%
 %% formatting integer with specific base
@@ -165,15 +203,20 @@ parse_int_base(<<D, Bin/binary>>, Base, R0) ->
 -include_lib("eunit/include/eunit.hrl").
 
 generate_test() ->
-  ?assertMatch({_, _, _}, generate()).
-
-generate_massive_test() ->
-  lists:foreach(
-    fun(_)->
-      ?assertMatch({_, _, _}, generate())
+  InitialID = generate(),
+  generate_test(InitialID, 1).
+generate_test(PrevID = {PrevTimestamp, _, PrevCounter}, Iter) ->
+  try
+    ID = {Timestamp, _, Counter} = generate_unsafe(),
+    case Timestamp == PrevTimestamp of
+      true  -> Counter == PrevCounter + 1 orelse erlang:error({'invalid new counter value'   , Iter, PrevID, ID});
+      false -> Counter == 0               orelse erlang:error({'invalid new ms counter value', Iter, PrevID, ID})
     end,
-    lists:seq(1, 10000)
-  ).
+    generate_test(ID, Iter + 1)
+  catch error:?rollover_error ->
+    PrevCounter == ?max_counter_value orelse erlang:error({'invalid max counter value', Iter, PrevID}),
+    ok
+  end.
 
 formats_test() ->
   ID = {306675022123, 42, 1},
