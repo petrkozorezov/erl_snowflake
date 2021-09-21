@@ -14,7 +14,8 @@
 
 -define(max_counter_value, (1 bsl ?counter_bits - 1)).
 -define(str_int_base, 62).
--define(rollover_error, 'maximum counter value reached').
+-define(rollover_error       , 'maximum counter value reached' ).
+-define(time_adjustment_error, 'system time has gone backwards').
 
 -define(id_bin(Timestamp, MachineID, Count),
   <<0:?zero_bits, (Timestamp):?timestamp_bits, (MachineID):?machine_id_bits, (Count):?counter_bits>>
@@ -128,23 +129,26 @@ snowflake_now() ->
   counter().
 get_and_increment_counter(Timestamp) ->
   AtomicsRef = ?pt_get(erl_snowflake_counter, atomics:new(1, [{signed, false}])),
-  Counter    = atomics:get(AtomicsRef, 1),
-  get_and_increment_counter(Timestamp, AtomicsRef, Counter).
+  AtomicValue = atomics:get(AtomicsRef, 1),
+  get_and_increment_counter(Timestamp, AtomicsRef, AtomicValue).
 
-get_and_increment_counter(Timestamp, AtomicsRef, Counter) ->
-  MSInitial  = Timestamp bsl ?counter_bits,
-  NewCounter =
+get_and_increment_counter(Timestamp, AtomicsRef, AtomicValue) ->
+  MSInitial = Timestamp bsl ?counter_bits,
+  Diff = AtomicValue - MSInitial,
+  NewAtomicValue =
     if
-      Counter == MSInitial + ?max_counter_value ->
+      Diff == ?max_counter_value ->
         erlang:error(?rollover_error);
-      Counter >= MSInitial ->
-        Counter + 1;
+      Diff > ?max_counter_value ->
+        erlang:error(?time_adjustment_error);
+      Diff >= 0 ->
+        AtomicValue + 1;
       true -> % new millisecond
         MSInitial
     end,
-  case atomics:compare_exchange(AtomicsRef, 1, Counter, NewCounter) of
+  case atomics:compare_exchange(AtomicsRef, 1, AtomicValue, NewAtomicValue) of
     ok ->
-      NewCounter band ?max_counter_value;
+      NewAtomicValue band ?max_counter_value;
     UpdatedCounter ->
       get_and_increment_counter(Timestamp, AtomicsRef, UpdatedCounter)
   end.
@@ -217,6 +221,17 @@ generate_test(PrevID = {PrevTimestamp, _, PrevCounter}, Iter) ->
     PrevCounter == ?max_counter_value orelse erlang:error({'invalid max counter value', Iter, PrevID}),
     ok
   end.
+
+different_ms_test() ->
+  {Timestamp1, _, _} = generate(),
+  ok = timer:sleep(1),
+  {Timestamp2, _, _} = generate(),
+  ?assertNotEqual(Timestamp1, Timestamp2).
+
+time_ajustments_test() ->
+  Timestamp = 1632249289197,
+  _ = get_and_increment_counter(Timestamp),
+  ?assertException(error, ?time_adjustment_error, get_and_increment_counter(Timestamp - 1)).
 
 formats_test() ->
   ID = {306675022123, 42, 1},
