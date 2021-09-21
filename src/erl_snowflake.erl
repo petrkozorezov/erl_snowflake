@@ -12,14 +12,10 @@
 -type  timestamp() :: non_neg_integer().
 -type machine_id() :: non_neg_integer().
 
--define(timestamp_size , 41).
--define(machine_id_size, 10).
--define(counter_size   , 12).
--define(snowflake_epoch, 1325376000000). % 2012-01-01 - 1970-01-01 in ms
--define(str_int_base   , 62).
+-define(str_int_base, 62).
 
 -define(id_bin(Timestamp, MachineID, Count),
-  <<0:1, (Timestamp):?timestamp_size, (MachineID):?machine_id_size, (Count):?counter_size>>
+  <<0:?zero_bits, (Timestamp):?timestamp_bits, (MachineID):?machine_id_bits, (Count):?counter_bits>>
 ).
 -define(id_int(IDInt), <<(IDInt):64/integer>>).
 
@@ -36,7 +32,6 @@ generate(Format) ->
   to(Format, generate()).
 
 %%
-
 
 -spec to(format(), id()) ->
   ID::term().
@@ -85,7 +80,7 @@ get_machine_id() ->
 
 -spec set_machine_id(machine_id()) ->
   ok.
-set_machine_id(MachineID) when is_integer(MachineID) andalso MachineID < 1 bsl ?machine_id_size ->
+set_machine_id(MachineID) when is_integer(MachineID) andalso MachineID < 1 bsl ?machine_id_bits ->
   persistent_term:put(erl_snowflake_machine_id, MachineID);
 set_machine_id(MachineID) ->
   erlang:error(badarg, [MachineID]).
@@ -93,7 +88,7 @@ set_machine_id(MachineID) ->
 -spec term_to_machine_id(term()) ->
   machine_id().
 term_to_machine_id(Term) ->
-  erlang:phash2(Term, 1 bsl ?machine_id_size).
+  erlang:phash2(Term, 1 bsl ?machine_id_bits).
 
 -spec hostname() ->
   string().
@@ -108,13 +103,13 @@ hostname() ->
 -spec snowflake_now() ->
   timestamp().
 snowflake_now() ->
-  erlang:system_time(millisecond) - ?snowflake_epoch.
+  erlang:system_time(millisecond) - ?epoch.
 
 -spec get_and_increment_counter() ->
   counter().
 get_and_increment_counter() ->
   Counter = ?pt_get(erl_snowflake_counter, atomics:new(1, [{signed, false}])),
-  atomics:add_get(Counter, 1, 1) rem (1 bsl ?counter_size).
+  atomics:add_get(Counter, 1, 1) rem (1 bsl ?counter_bits).
 
 %%
 %% formatting integer with specific base

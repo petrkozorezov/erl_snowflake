@@ -45,3 +45,29 @@ ok
 4> erl_snowflake:get_machine_id().
 238
 ```
+
+## ID structure
+
+Classical twitter id structure is 1-41-10-12
+ * 1 zero bit
+ * 41 timestamp
+ * 10 machine id
+ * 12 counter
+
+It can be configured via defines for your needs (e.g. as in [instagram](https://instagram-engineering.com/sharding-ids-at-instagram-1cf5a71e5a5c) 0-41-13-10).
+
+### rebar.config
+```erlang
+{overrides, [
+  {override, erl_snowflake, [
+    {erl_opts, [
+      % instagram id structure
+      {d, zero_bits      ,  0},
+      {d, timestamp_bits , 41},
+      {d, machine_id_bits, 13},
+      {d, counter_bits   , 10},
+      {d, epoch          , 1314220021721}
+    ]}
+  ]}
+]}.
+```
