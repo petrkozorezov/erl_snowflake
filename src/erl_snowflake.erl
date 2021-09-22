@@ -11,13 +11,14 @@
 -type  timestamp() :: non_neg_integer().
 -type machine_id() :: non_neg_integer().
 
+-define(zero_bits, 64 - ?timestamp_bits - ?machine_id_bits - ?counter_bits).
 -define(max_counter_value, (1 bsl ?counter_bits - 1)).
 -define(str_int_base, 62).
 -define(rollover_error       , 'maximum counter value reached' ).
 -define(time_adjustment_error, 'system time has gone backwards').
 
 -define(id_bin(Timestamp, MachineID, Count),
-  <<0:?zero_bits, (Timestamp):?timestamp_bits, (MachineID):?machine_id_bits, (Count):?counter_bits>>
+  <<0:(?zero_bits), (Timestamp):(?timestamp_bits), (MachineID):(?machine_id_bits), (Count):(?counter_bits)>>
 ).
 -define(id_int(IDInt), <<(IDInt):64/integer>>).
 
