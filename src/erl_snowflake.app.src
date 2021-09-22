@@ -1,6 +1,6 @@
 {application, erl_snowflake, [
   {description, "Erlang fast snowflake id generator"},
-  {vsn, "1.0.0"},
+  {vsn, git},
   {registered, []},
   {applications, [
     kernel,
