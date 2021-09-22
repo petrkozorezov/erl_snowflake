@@ -3,7 +3,6 @@
 -export([generate/0, generate_unsafe/0, generate/1, generate_unsafe/1]).
 -export([to/2, from/2]).
 -export([get_machine_id/0, set_machine_id/1, term_to_machine_id/1, hostname/0]).
--export([snowflake_now/0, get_and_increment_counter/1]).
 
 -type     id() :: {timestamp(), machine_id(), counter()}.
 -type format() :: bin | int | str | b62.
@@ -22,6 +21,17 @@
 ).
 -define(id_int(IDInt), <<(IDInt):64/integer>>).
 
+-define(pt_get(Key, Expr),
+  case persistent_term:get(Key, undefined) of
+    undefined ->
+      __InitValue = Expr,
+      ok = persistent_term:put(Key, __InitValue),
+      __InitValue;
+    __Value ->
+      __Value
+  end
+).
+
 %%
 
 -spec generate() ->
@@ -38,8 +48,8 @@ generate() ->
 -spec generate_unsafe() ->
   id().
 generate_unsafe() ->
-  Timestamp = snowflake_now(),
-  {Timestamp, get_machine_id(), get_and_increment_counter(Timestamp)}.
+  AtomicsRef = ?pt_get(erl_snowflake_counter, atomics:new(1, [{signed, false}])),
+  generate_unsafe_iter(AtomicsRef, atomics:get(AtomicsRef, 1), get_machine_id()).
 
 -spec generate(format()) ->
   ID::term().
@@ -82,17 +92,6 @@ from(Format, ID) ->
 
 %%
 
--define(pt_get(Key, Expr),
-  case persistent_term:get(Key, undefined) of
-    undefined ->
-      __InitValue = Expr,
-      ok = persistent_term:put(Key, __InitValue),
-      __InitValue;
-    __Value ->
-      __Value
-  end
-).
-
 -spec get_machine_id() ->
   machine_id().
 get_machine_id() ->
@@ -120,21 +119,12 @@ hostname() ->
 
 %%
 
--spec snowflake_now() ->
-  timestamp().
-snowflake_now() ->
-  erlang:system_time(millisecond) - ?epoch.
-
--spec get_and_increment_counter(timestamp()) ->
-  counter().
-get_and_increment_counter(Timestamp) ->
-  AtomicsRef = ?pt_get(erl_snowflake_counter, atomics:new(1, [{signed, false}])),
-  AtomicValue = atomics:get(AtomicsRef, 1),
-  get_and_increment_counter(Timestamp, AtomicsRef, AtomicValue).
-
-get_and_increment_counter(Timestamp, AtomicsRef, AtomicValue) ->
+-spec generate_unsafe_iter(reference(), pos_integer(), pos_integer()) ->
+  id().
+generate_unsafe_iter(AtomicsRef, AtomicValue, MachineID) ->
+  Timestamp = snowflake_now(),
   MSInitial = Timestamp bsl ?counter_bits,
-  Diff = AtomicValue - MSInitial,
+  Diff      = AtomicValue - MSInitial,
   NewAtomicValue =
     if
       Diff == ?max_counter_value ->
@@ -148,10 +138,15 @@ get_and_increment_counter(Timestamp, AtomicsRef, AtomicValue) ->
     end,
   case atomics:compare_exchange(AtomicsRef, 1, AtomicValue, NewAtomicValue) of
     ok ->
-      NewAtomicValue band ?max_counter_value;
+      {Timestamp, MachineID, NewAtomicValue band ?max_counter_value};
     UpdatedCounter ->
-      get_and_increment_counter(Timestamp, AtomicsRef, UpdatedCounter)
+      generate_unsafe_iter(AtomicsRef, UpdatedCounter, MachineID)
   end.
+
+-spec snowflake_now() ->
+  timestamp().
+snowflake_now() ->
+  erlang:system_time(millisecond) - ?epoch.
 
 %%
 %% formatting integer with specific base
@@ -222,16 +217,41 @@ generate_test(PrevID = {PrevTimestamp, _, PrevCounter}, Iter) ->
     ok
   end.
 
+concurent_generate_test() ->
+  Self = erlang:self(),
+  Pids = [
+    erlang:spawn_link(
+      fun() ->
+        concurent_generate_test_iter(Self, 10000, [])
+      end
+    )
+    || _ <- lists:seq(1, 20)
+  ],
+  AllResults =
+    lists:flatten([
+      receive
+        {finish, Pid, Results} -> Results
+      after
+        1000 -> erlang:exit({timeout, Pid})
+      end
+      || Pid <- Pids
+    ]),
+  ?assertEqual(erlang:length(AllResults), sets:size(sets:from_list(AllResults))).
+concurent_generate_test_iter(Parent, Count, Results) when erlang:length(Results) < Count ->
+  try
+    ID = generate_unsafe(),
+    concurent_generate_test_iter(Parent, Count, [ID|Results])
+  catch error:?rollover_error ->
+    concurent_generate_test_iter(Parent, Count, Results)
+  end;
+concurent_generate_test_iter(Parent, _, Results) ->
+  Parent ! {finish, erlang:self(), Results}.
+
 different_ms_test() ->
   {Timestamp1, _, _} = generate(),
   ok = timer:sleep(1),
   {Timestamp2, _, _} = generate(),
   ?assertNotEqual(Timestamp1, Timestamp2).
-
-time_ajustments_test() ->
-  Timestamp = 1632249289197,
-  _ = get_and_increment_counter(Timestamp),
-  ?assertException(error, ?time_adjustment_error, get_and_increment_counter(Timestamp - 1)).
 
 formats_test() ->
   ID = {306675022123, 42, 1},
@@ -244,7 +264,6 @@ formats_test() ->
       {b62, ID, <<"1X1DGM2oOsz">>             }
     ]
   ).
-
 test_format({Format, ID, IDFormatted}) ->
   ?assertEqual(IDFormatted,   to(Format, ID         )),
   ?assertEqual(ID         , from(Format, IDFormatted)).
